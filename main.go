@@ -1,15 +1,16 @@
 package shortener
 
 import (
-	"errors"
 	"fmt"
 	"hash/fnv"
 	"strconv"
 )
 
 const (
-	notFoundValue = ""
-	emptyHashValue = ""
+	notFoundValue         = ""
+	emptyHashValue        = ""
+	maxUInt64Value        = 18446744073709551615
+	maxUInt64CheckedValue = maxUInt64Value - 1
 )
 
 type Shortener interface {
@@ -21,28 +22,68 @@ type shortenerImpl struct {
 	urlMap map[string]string
 }
 
-func makeHash(str string) (string, error) {
-	if str == "" {
-		return emptyHashValue, errors.New("empty string not supported")
-	}
-
+func makeHash(str string) (uint64, error) {
 	hashBuilder := fnv.New64()
 	_, err := hashBuilder.Write([]byte(str))
 
 	if err != nil {
-		return emptyHashValue, err
+		return 0, err
 	}
 
 	hashValue := hashBuilder.Sum64()
-	return strconv.FormatUint(hashValue, 36), nil
+	return hashValue, nil
+}
+
+func hashToChars(hashValue uint64) string {
+	return strconv.FormatUint(hashValue, 36)
 }
 
 func (shortener *shortenerImpl) Shorten(url string) string {
-	shortLink, err := makeHash(url)
+	if url == "" {
+		return emptyHashValue
+	}
+
+	hashValue, err := makeHash(url)
 
 	if err != nil {
 		fmt.Printf("Error generating short link for url \"%s\": %s.", url, err.Error())
 		return emptyHashValue
+	}
+
+	shortLink := hashToChars(hashValue)
+
+	savedLink, collision := shortener.urlMap[url]
+
+	//Using open hash addressing if our url is different
+	//from saved in map with same hash value
+	if collision && savedLink != url {
+		var tryCount uint64 = 0
+
+		for collision {
+			if tryCount == maxUInt64Value {
+				break
+			}
+
+			if hashValue == maxUInt64CheckedValue {
+				hashValue = 0
+			} else {
+				hashValue += 1
+			}
+
+			shortLink = hashToChars(hashValue)
+			savedLink, collision = shortener.urlMap[url]
+
+			if collision && savedLink == url {
+				collision = false
+			}
+
+			tryCount++
+		}
+
+		if tryCount == maxUInt64Value {
+			fmt.Println("No empty slots for storing new short link")
+			return emptyHashValue
+		}
 	}
 
 	shortener.urlMap[shortLink] = url
